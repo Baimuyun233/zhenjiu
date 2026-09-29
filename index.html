@@ -499,7 +499,7 @@ function applyTheme(){
   var t = Prefs.settings().theme || 'auto';
   document.documentElement.setAttribute('data-theme', t);
 }
-applyTheme;
+applyTheme();
 </script>
 
 <script>
@@ -3034,7 +3034,7 @@ function recentSearches(){
 function pushRecent(kw){
   kw = String(kw || '').trim();
   if (kw.length < 1) return;
-  var a = recentSearches.filter(function(x){ return x !== kw; });
+  var a = recentSearches().filter(function(x){ return x !== kw; });
   a.unshift(kw);
   Store.write('recentSearch', a.slice(0, 8));
 }
@@ -3089,18 +3089,45 @@ function acupointCard(a, kw){
   '</a>';
 }
 
-PAGES.search = function(r){
-  var cur = {
-    kw: r.query.kw || '',
-    m: (r.query.m || '').toLowerCase(),
-    r: r.query.r || '',
-    s: r.query.s || '',
-    sort: r.query.sort || ''
-  };
+/* 检索结果区：单独抽成函数，输入时只重绘这一块。
+   输入框、【筛选】按钮与筛选面板都不在重绘范围内 ——
+   一旦重建输入框，中文输入法的合成会话就会被打断（候选框消失、拼音被强制上屏）。 */
+function searchResultsHtml(cur, opts){
+  cur = cur || {};
+  opts = opts || {};
   var filtered = filterAcupoints(cur);
   var fcount = activeFilterCount(cur);
   var mCur = getMeridian(cur.m);
+
+  var wl = filtered.length
+    ? (filtered.length > 200
+        ? '<span class="chip warn">仅显示前 200 条，请缩小范围</span>'
+        : '')
+    : '';
+
+  var body = filtered.length
+    ? filtered.slice(0, 200).map(function(a){ return acupointCard(a, cur.kw); }).join('') +
+      (filtered.length > 200 ? '<div class="empty-box">仅显示前 200 条，请用关键词或筛选条件缩小范围。</div>' : '')
+    : '<div class="empty-box">没有符合条件的穴位。<br>试试减少筛选条件，或换一个关键词（支持穴名、拼音、代码、主治）。</div>';
+
+  if (opts.bodyOnly) return body;
+
+  return '<div class="result-head">' +
+      '<h2>' + filtered.length + ' 个结果</h2>' +
+      (mCur ? '<span class="chip acc">' + esc(mCur.name) + '</span>' : '') +
+      (cur.r ? '<span class="chip acc">' + esc(REGION_LABEL[cur.r] || cur.r) + '</span>' : '') +
+      (cur.s ? '<span class="chip acc">' + esc(cur.s) + '</span>' : '') +
+      (cur.kw ? '<span class="chip">关键词：' + esc(cur.kw) + '</span>' : '') +
+      wl +
+    '</div>' +
+    '<section>' + body + '</section>';
+}
+
+/* 筛选面板内容：输入关键词时连它一起刷新（面板里没有输入框，
+   替换 innerHTML 不会碰到输入元素，所以不影响中文输入法的合成）。 */
+function filterPanelHtml(cur){
   var counts = regionCounts(filterAcupoints({ m: cur.m, s: cur.s, kw: cur.kw }));
+  var fcount = activeFilterCount(cur);
 
   var mChips = '' +
     '<a class="f-chip' + (!cur.m ? ' on' : '') + '" href="' + searchHash(qWith(cur, { m:'' })) + '">全部</a>' +
@@ -3130,18 +3157,32 @@ PAGES.search = function(r){
       searchHash(qWith(cur, { sort: o.id === 'meridian' ? '' : o.id })) + '">' + esc(o.label) + '</a>';
   }).join('');
 
-  var recent = recentSearches();
-  var recentBox = recent.length
-    ? '<div class="search-hint" style="margin-top:8px">最近：' +
-        recent.map(function(k){
-          return '<a class="chip" href="' + searchHash(qWith(cur, { kw:k })) + '">' + esc(k) + '</a>';
-        }).join(' ') + '</div>'
-    : '';
+  return '' +
+    '<div class="f-group"><div class="f-label">经络</div><div class="f-row">' + mChips + '</div></div>' +
+    '<div class="f-group"><div class="f-label">部位</div><div class="f-row">' + rChips + '</div></div>' +
+    '<div class="f-group"><div class="f-label">特定穴</div><div class="f-row">' + sChips + '</div></div>' +
+    '<div class="f-group"><div class="f-label">排序</div><div class="f-row">' + sortChips + '</div></div>' +
+    (fcount ? '<div class="row"><a class="btn sm" href="#/search">清空全部筛选</a></div>' : '');
+}
 
-  var listBox = filtered.length
-    ? filtered.slice(0, 200).map(function(a){ return acupointCard(a, cur.kw); }).join('') +
-      (filtered.length > 200 ? '<div class="empty-box">仅显示前 200 条，请用关键词或筛选条件缩小范围。</div>' : '')
-    : '<div class="empty-box">没有符合条件的穴位。<br>试试减少筛选条件，或换一个关键词（支持穴名、拼音、代码、主治）。</div>';
+function recentBoxHtml(cur){
+  var recent = recentSearches();
+  if (!recent.length) return '';
+  return '<div class="search-hint" style="margin-top:8px">最近：' +
+    recent.map(function(k){
+      return '<a class="chip" href="' + searchHash(qWith(cur, { kw:k })) + '">' + esc(k) + '</a>';
+    }).join(' ') + '</div>';
+}
+
+PAGES.search = function(r){
+  var cur = {
+    kw: r.query.kw || '',
+    m: (r.query.m || '').toLowerCase(),
+    r: r.query.r || '',
+    s: r.query.s || '',
+    sort: r.query.sort || ''
+  };
+  var fcount = activeFilterCount(cur);
 
   return '' +
   pageHead('穴位检索', '按经络、部位、特定穴与关键词筛选，共收录 ' + ACUPOINTS.length + ' 穴') +
@@ -3151,6 +3192,7 @@ PAGES.search = function(r){
       '<div class="search-input-wrap">' +
         '<span class="ic" aria-hidden="true">⌕</span>' +
         '<input id="kw" class="inp search-input" type="search" inputmode="search" autocomplete="off" ' +
+          'enterkeyhint="search" autocorrect="off" autocapitalize="off" spellcheck="false" ' +
           'placeholder="穴名 / 拼音 / 代码 / 主治，如 合谷 hegu LI4" value="' + esc(cur.kw) + '" ' +
           'aria-label="关键词检索">' +
         (cur.kw ? '<button class="search-clear" type="button" data-clear-kw="1" aria-label="清空关键词">×</button>' : '') +
@@ -3160,24 +3202,12 @@ PAGES.search = function(r){
       '</button>' +
     '</div>' +
 
-    '<div class="filter-panel" id="filterPanel">' +
-      '<div class="f-group"><div class="f-label">经络</div><div class="f-row">' + mChips + '</div></div>' +
-      '<div class="f-group"><div class="f-label">部位</div><div class="f-row">' + rChips + '</div></div>' +
-      '<div class="f-group"><div class="f-label">特定穴</div><div class="f-row">' + sChips + '</div></div>' +
-      '<div class="f-group"><div class="f-label">排序</div><div class="f-row">' + sortChips + '</div></div>' +
-      (fcount ? '<div class="row"><a class="btn sm" href="#/search">清空全部筛选</a></div>' : '') +
-    '</div>' +
-    recentBox +
+    /* 面板与结果区各自套一层容器：输入时只换它们的内容，输入框与按钮原地不动 */
+    '<div class="filter-panel" id="filterPanel">' + filterPanelHtml(cur) + '</div>' +
+    '<div id="searchRecent">' + recentBoxHtml(cur) + '</div>' +
   '</section>' +
 
-  '<div class="result-head">' +
-    '<h2>' + filtered.length + ' 个结果</h2>' +
-    (mCur ? '<span class="chip acc">' + esc(mCur.name) + '</span>' : '') +
-    (cur.r ? '<span class="chip acc">' + esc(REGION_LABEL[cur.r] || cur.r) + '</span>' : '') +
-    (cur.s ? '<span class="chip acc">' + esc(cur.s) + '</span>' : '') +
-    (cur.kw ? '<span class="chip">关键词：' + esc(cur.kw) + '</span>' : '') +
-  '</div>' +
-  '<section>' + listBox + '</section>' +
+  '<div id="searchResults">' + searchResultsHtml(cur) + '</div>' +
 
   '<section class="card">' +
     '<div class="card-t"><h3>检索用法</h3></div>' +
@@ -3190,42 +3220,127 @@ PAGES.search = function(r){
 };
 
 /* ===== 检索页交互：输入防抖 + 筛选面板 ===== */
+/* 中文输入法（IME）关键规则：只要用户还在输入，就绝对不能让检索页整页重绘。
+   整页重绘 = 输入框被销毁重建 = 合成会话作废（候选框不弹、拼音被强制上屏、
+   输入焦点丢失，连下一个拼音都打不进去）。所以：
+     · composition 进行中：什么都不做（不重绘、不写地址）；
+     · 普通输入：只替换 #searchResults / #filterPanel / #searchRecent 的内容，
+       输入框与【筛选】按钮原地不动；
+     · 地址用 history.replaceState 同步（不触发 hashchange，所以不会连锁重绘），
+       不支持时静默放弃，不影响当前显示。 */
 (function(){
   var timer = 0;
+  var composing = false;
 
   function currentQuery(){
     var r = (typeof parseHash() === 'function') ? parseHash() : { query:{} };
     return r.query || {};
   }
-  function goSearch(patch){
-    var q = {};
-    var cur = currentQuery;
-    ['kw','m','r','s','sort'].forEach(function(k){ q[k] = cur[k] || ''; });
-    Object.keys(patch).forEach(function(k){ q[k] = tch[k]; });
-    var kwEl = document.getElementById('kw');
-    if (kwEl && q.kw === undefined) q.kw = kwEl.value;
-    /* 输入即改地址会重绘，重绘后要把光标放回输入框 */
-    if (q.kw) sessionStorage.setItem('zj:refocus', '1');
-    go(searchHash(q));
+  function queryOf(kw){
+    var q = currentQuery();
+    return {
+      kw: kw == null ? (q.kw || '') : kw,
+      m: (q.m || '').toLowerCase(),
+      r: q.r || '',
+      s: q.s || '',
+      sort: q.sort || ''
+    };
   }
+  /* 只改地址，不触发 hashchange —— hashchange 会走 render()，输入框就没了 */
+  function syncHash(url){
+    if (location.hash === url) return;
+    try {
+      if (window.history && history.replaceState) history.replaceState(null, '', url);
+    } catch (err){
+      /* file:// 下个别浏览器不允许写地址栏：放弃，功能不受影响 */
+    }
+  }
+  /* 清空按钮跟着关键词出现/消失，但只在输入框外面动手（不能重建 .search-input-wrap） */
+  function syncClearBtn(kw){
+    var inp = document.getElementById('kw');
+    var wrap = (inp && inp.parentNode) ? inp.parentNode : document.querySelector('.search-input-wrap');
+    if (!wrap || !wrap.children) return;
+    var btn = null, i;
+    for (i = 0; i < wrap.children.length; i++){
+      if (wrap.children[i].getAttribute && wrap.children[i].getAttribute('data-clear-kw')) btn = wrap.children[i];
+    }
+    if (kw && !btn){
+      btn = document.createElement('button');
+      btn.className = 'search-clear';
+      btn.setAttribute('type', 'button');
+      btn.setAttribute('data-clear-kw', '1');
+      btn.setAttribute('aria-label', '清空关键词');
+      btn.textContent = '×';
+      wrap.appendChild(btn);
+    } else if (!kw && btn){
+      wrap.removeChild(btn);
+    }
+  }
+  /* 输入时只刷这几块，输入元素本身永不重建 */
+  function liveUpdate(kw){
+    var box = document.getElementById('searchResults');
+    if (!box) return false;
+    var cur = queryOf(kw);
+    box.innerHTML = searchResultsHtml(cur);
+    var panel = document.getElementById('filterPanel');
+    if (panel) panel.innerHTML = filterPanelHtml(cur);
+    var recent = document.getElementById('searchRecent');
+    if (recent) recent.innerHTML = recentBoxHtml(cur);
+    syncClearBtn(cur.kw);
+    return true;
+  }
+  function goSearch(patch){
+    var cur = queryOf(null);
+    Object.keys(patch).forEach(function(k){ cur[k] = patch[k]; });
+    syncHash(searchHash(cur));
+    if (!liveUpdate(cur.kw) && typeof render === 'function') render();
+  }
+
+  function isComposingEvent(e){
+    return !!e.isComposing || composing || e.keyCode === 229;
+  }
+
+  document.addEventListener('compositionstart', function(e){
+    var t = e.target;
+    if (!t || t.id !== 'kw') return;
+    composing = true;
+    clearTimeout(timer);
+  });
+  document.addEventListener('compositionend', function(e){
+    var t = e.target;
+    if (!t || t.id !== 'kw') return;
+    composing = false;
+    clearTimeout(timer);
+    /* 合成结束后按最终文本检索一次 */
+    var kw = t.value.trim();
+    if (kw) pushRecent(kw);
+    goSearch({ kw: kw });
+  });
 
   document.addEventListener('input', function(e){
     var t = e.target;
     if (!t || t.id !== 'kw') return;
+    /* 浏览器自己报的 isComposing 最可信；万一 compositionend 没送到（切窗口、点别处），
+       下一个非合成 input 就把 composing 复位，避免以后再也不刷新结果 */
+    if (!e.isComposing && e.keyCode !== 229) composing = false;
     clearTimeout(timer);
+    if (isComposingEvent(e)){
+      /* 合成中：连地址也先不动，等选字结束再写，避免任何页面级动作干扰输入法 */
+      return;
+    }
     timer = setTimeout(function(){
       var kw = t.value.trim();
       if (kw) pushRecent(kw);
-      goSech({ kw: kw });
+      goSearch({ kw: kw });
     }, 200);
   });
   document.addEventListener('keydown', function(e){
     var t = e.target;
     if (!t || t.id !== 'kw') return;
+    /* 输入法候选框里的回车（keyCode 229）不是“确认搜索”，不能拦截 */
+    if (isComposingEvent(e)) return;
     if (e.key === 'Enter'){
-      e.preventDefault;
       clearTimeout(timer);
-      t.blur();
       goSearch({ kw: t.value.trim() });
     }
     if (e.key === 'Escape'){ t.value = ''; goSearch({ kw: '' }); }
@@ -3233,7 +3348,12 @@ PAGES.search = function(r){
   document.addEventListener('click', function(e){
     var t = e.target;
     if (!t || !t.closest) return;
-    if (t.closest('[data-clear-kw]')){ goSearch({ kw: '' }); return; }
+    if (t.closest('[data-clear-kw]')){
+      var inp = document.getElementById('kw');
+      if (inp) inp.value = '';
+      goSearch({ kw: '' });
+      return;
+    }
     var btn = t.closest('#btnFilter');
     if (btn){
       var panel = document.getElementById('filterPanel');
@@ -3244,18 +3364,17 @@ PAGES.search = function(r){
     }
   });
 
-  /* 重绘后恢复输入焦点与光标位置 */
+  /* 输入时不再整页重绘，所以不需要“重绘后恢复焦点”那套补丁了。
+     只有整页跳转（用筛选标签、从别的页面回来）才会走这里，
+     这时按地址把输入框的值对齐一下即可。 */
   var prevAfter = window.afterRender;
   window.afterRender = function(r){
     if (typeof prevAfter === 'function') prevAfter(r);
-    if (r.page !== 'search') return;
+    if (r.page !== 'search' || composing) return;
     var el = document.getElementById('kw');
     if (!el) return;
-    var want = sessionStorage.getItem('zj:refocus');
-    if (!want) return;
-    sessionStorage.removeItem('zj:refocus');
-    el.focus();
-    try { el.setSelectionRange(el.value.length, el.value.length); } catch(err){ /* 某些浏览器不支持 */ }
+    var cur = (r.query && r.query.kw) || '';
+    if (el.value !== cur) el.value = cur;
   };
 })();
 </script>
@@ -3456,17 +3575,14 @@ PAGES.favorites = function(r){
 /* =====================================================================
    页面：我的笔记
    ===================================================================== */
-PAGES.notes = function(r){
-  var kw = r.query.kw || '';
-  var tag = r.query.tag || '';
+/* 笔记条目区单独成函数：输入关键词时只刷这一块，输入框不重建
+   （重建输入框会打断中文输入法的合成，导致候选框消失、拼音被强制上屏）。 */
+function noteItemsHtml(kw, tag){
+  kw = kw || '';
+  tag = tag || '';
   var all = Prefs.notes();
   var rows = Object.keys(all).map(function(ref){
-    return { ref:ref, note:all[ref], t:noteTart(ref) };
-  });
-  /* 标签统计 */
-  var tagCount = {};
-  rows.forEach(function(x){
-    (x.note.tags || []).forEach(function(t){ tagCount[t] = (tagCot[t] || 0) + 1; });
+    return { ref:ref, note:all[ref], t:noteTarget(ref) };
   });
   var filtered = rows.filter(function(x){
     if (tag && (x.note.tags || []).indexOf(tag) === -1) return false;
@@ -3479,17 +3595,7 @@ PAGES.notes = function(r){
   filtered.sort(function(a, b){
     return String(b.note.updatedAt || '').localeCompare(String(a.note.updatedAt || ''));
   });
-
-  var tagChips = Object.keys(tagCount).length
-    ? '<div class="f-row">' +
-        '<a class="f-chip' + (!tag ? ' on' : '') + '" href="#/notes' + (kw ? '?kw=' + encodeURIComponent(kw) : '') + '">全部标签</a>' +
-        Object.keys(tagCount).sort(function(a, b){ return tagCount[b] - tagCount[a]; }).map(function(t){
-          return '<a class="f-chip' + (tag === t ? ' on' : '') + '" href="#/notes?tag=' + encodeURIComponent(t) + '">' +
-            esc(t) + '<small>' + tagCount[t] + '</small></a>';
-        }).join('') + '</div>'
-    : '<div class="card-note">还没有标签。写笔记时可以加标签，方便按主题复习。</div>';
-
-  var list = filtered.length ? filtered.map(function(x){
+  var out = filtered.length ? filtered.map(function(x){
     var note = x.note;
     var when = note.updatedAt ? String(note.updatedAt).slice(0, 16).replace('T', ' ') : '';
     var href = x.t.kind === 'acupoint' ? '#/acupoint/' + encodeURIComponent(x.t.id)
@@ -3511,46 +3617,120 @@ PAGES.notes = function(r){
       '</div>' +
     '</div>';
   }).join('') : '<div class="empty-box">没有匹配的笔记。</div>';
+  return '<div class="result-head"><h2>' + filtered.length + ' 条笔记</h2>' +
+    (kw ? '<span class="chip">关键词：' + esc(kw) + '</span>' : '') + '</div>' +
+    '<section>' + out + '</section>';
+}
+
+/* 标签条单独成函数：输入关键词时连它一起刷新（标签条里没有输入框）。
+   标签链接带上关键词，点进去后筛选条件不丢。 */
+function noteTagChipsHtml(kw, tag){
+  var tagCount = {};
+  var all = Prefs.notes();
+  Object.keys(all).forEach(function(ref){
+    (all[ref].tags || []).forEach(function(t){ tagCount[t] = (tagCount[t] || 0) + 1; });
+  });
+  if (!Object.keys(tagCount).length){
+    return '<div class="card-note">还没有标签。写笔记时可以加标签，方便按主题复习。</div>';
+  }
+  var q = function(extra){
+    var parts = [];
+    if (kw) parts.push('kw=' + encodeURIComponent(kw));
+    if (extra) parts.push(extra);
+    return '#/notes' + (parts.length ? '?' + parts.join('&') : '');
+  };
+  return '<div class="f-row">' +
+    '<a class="f-chip' + (!tag ? ' on' : '') + '" href="' + q('') + '">全部标签</a>' +
+    Object.keys(tagCount).sort(function(a, b){ return tagCount[b] - tagCount[a]; }).map(function(t){
+      return '<a class="f-chip' + (tag === t ? ' on' : '') + '" href="' + q('tag=' + encodeURIComponent(t)) + '">' +
+        esc(t) + '<small>' + tagCount[t] + '</small></a>';
+    }).join('') + '</div>';
+}
+
+PAGES.notes = function(r){
+  var kw = r.query.kw || '';
+  var tag = r.query.tag || '';
+  var total = Object.keys(Prefs.notes()).length;
+  var matched = noteItemsHtml(kw, tag).match(/<h2>(\d+) 条笔记<\/h2>/);
 
   return '' +
-  pageHead('我的笔记', '共 ' + rows.length + ' 条，' + filtered.length + ' 条符合当前条件', '#/me') +
+  pageHead('我的笔记', '共 ' + total + ' 条，' + (matched ? matched[1] : '0') + ' 条符合当前条件', '#/me') +
   '<section class="card">' +
     '<div class="search-bar">' +
       '<div class="search-input-wrap">' +
         '<span class="ic" aria-hidden="true">⌕</span>' +
-        '<input id="noteKw" class="inp search-input" type="search" autocomplete="off" placeholder="搜索笔记内容 / 穴位 / 标签" value="' + esc(kw) + '" aria-label="搜索笔记">' +
+        '<input id="noteKw" class="inp search-input" type="search" enterkeyhint="search" autocomplete="off" placeholder="搜索笔记内容 / 穴位 / 标签" value="' + esc(kw) + '" aria-label="搜索笔记">' +
       '</div>' +
       '<a class="btn" href="#/notes">清空</a>' +
     '</div>' +
-    tagChips +
+    '<div id="noteTagBar">' + noteTagChipsHtml(kw, tag) + '</div>' +
   '</section>' +
-  '<section>' + list + '</section>' +
+  '<div id="noteItems">' + noteItemsHtml(kw, tag) + '</div>' +
   '<section class="card"><div class="card-note">笔记保存在本机 <code>zj:notes</code>，支持导出导入；内容不逐条核对，' + SAFE_NOTE + '</div></section>';
 };
 
-/* 笔记页搜索：防抖 200ms */
+/* 笔记页搜索：防抖 200ms；只更新条目区与标签条，输入框永不重建
+   （重建输入框会打断中文输入法的合成 → 候选框消失、拼音被强制上屏）。 */
 (function(){
   var timer = 0;
+  var composing = false;
+
+  /* 只改地址，不触发 hashchange（hashchange → render() → 输入框被销毁重建） */
+  function syncHash(url){
+    if (location.hash === url) return;
+    try {
+      if (window.history && history.replaceState) history.replaceState(null, '', url);
+    } catch (err){
+      /* file:// 下个别浏览器不允许写地址栏：放弃，功能不受影响 */
+    }
+  }
+  function apply(kw){
+    var tag = parseHash().query.tag || '';
+    var parts = [];
+    if (kw) parts.push('kw=' + encodeURIComponent(kw));
+    if (tag) parts.push('tag=' + encodeURIComponent(tag));
+    syncHash('#/notes' + (parts.length ? '?' + parts.join('&') : ''));
+    var box = document.getElementById('noteItems');
+    if (box){
+      box.innerHTML = noteItemsHtml(kw, tag);
+      var tags = document.getElementById('noteTagBar');
+      if (tags) tags.innerHTML = noteTagChipsHtml(kw, tag);
+      return;
+    }
+    if (typeof render === 'function') render();
+  }
+
+  document.addEventListener('compositionstart', function(e){
+    if (!e.target || e.target.id !== 'noteKw') return;
+    composing = true;
+    clearTimeout(timer);
+  });
+  document.addEventListener('compositionend', function(e){
+    var t = e.target;
+    if (!t || t.id !== 'noteKw') return;
+    composing = false;
+    clearTimeout(timer);
+    apply(t.value.trim());
+  });
   document.addEventListener('input', function(e){
     var t = e.target;
     if (!t || t.id !== 'noteKw') return;
+    /* 浏览器自己报的 isComposing 最可信；compositionend 万一没送到也能自愈 */
+    if (!e.isComposing && e.keyCode !== 229) composing = false;
     clearTimeout(timer);
-    timer = setTimeout(function(){
-      var kw = t.value.trim();
-      sessionStorage.setItem('zj:refocus', '1');
-      go('#/notes' + (kw ? '?kw=' + encodeURIComponent(kw) : ''));
-    }, 200);
+    if (composing || e.isComposing || e.keyCode === 229) return;   /* 合成中什么都不做 */
+    timer = setTimeout(function(){ apply(t.value.trim()); }, 200);
   });
+
+  /* 输入不再整页重绘，只需在整页跳转后把输入框的值对齐地址 */
   var prev = window.afterRender;
   window.afterRender = function(r){
     if (typeof prev === 'function') prev(r);
-    if (r.page !== 'notes' && r.page !== 'favorites') return;
+    if (r.page !== 'notes' || composing) return;
     var el = document.getElementById('noteKw');
-    if (el && sessionStorage.getItem('zj:refocus')){
-      sessionStorage.removeItem('zj:refocus');
-      el.focus();
-      try { el.setSelectionRange(el.value.length, el.value.length); } catch(err){}
-    }
+    if (!el) return;
+    var cur = (r.query && r.query.kw) || '';
+    if (el.value !== cur) el.value = cur;
   };
 })();
 </script>
@@ -3806,7 +3986,7 @@ PAGES['quiz/run'] = function(r){
   var start = r.query.start || '';
   if (start === 'quick10'){
     QUIZ.ids = quizBuild({ limit:10 });
-    QUIZ.i = 0; QUIZ.answers = {}; QUIZ.seed = Date.now % 99991; QUIZ.on = true;
+    QUIZ.i = 0; QUIZ.answers = {}; QUIZ.seed = Date.now() % 99991; QUIZ.on = true;
     quizSave();
   } else if (r.query.type || r.query.tag || r.query.diff || r.query.ids){
     QUIZ.ids = r.query.ids ? String(r.query.ids).split(',') : quizBuild({
@@ -3814,12 +3994,12 @@ PAGES['quiz/run'] = function(r){
       tag: r.query.tag || '',
       diff: r.query.diff || ''
     });
-    QUIZ.i = 0; QUIZ.answers = {}; QUIZ.seed = Date.now % 99991; QUIZ.on = true;
+    QUIZ.i = 0; QUIZ.answers = {}; QUIZ.seed = Date.now() % 99991; QUIZ.on = true;
     quizSave();
   } else if (!QUIZ.on){
     if (!quizRestore()){
       QUIZ.ids = quizBuild({});
-      QUIZ.i = 0; QUIZ.answers = {}; QUIZ.seed = Date.now % 99991; QUIZ.on = true;
+      QUIZ.i = 0; QUIZ.answers = {}; QUIZ.seed = Date.now() % 99991; QUIZ.on = true;
       quizSave();
     }
   }
@@ -4122,8 +4302,8 @@ PAGES.bookmarks = function(r){
     }
 
     if (t.id === 'qSubmit'){ submit(); return; }
-    if (t.id === 'qNext'){ next; return; }
-    if (t.id === 'qSkip'){ next; return; }
+    if (t.id === 'qNext'){ next(); return; }
+    if (t.id === 'qSkip'){ next(); return; }
     if (t.id === 'qMark'){
       var q2 = nowQ();
       if (!q2) return;
@@ -4134,14 +4314,14 @@ PAGES.bookmarks = function(r){
     }
     if (t.id === 'qAgain'){
       QUIZ.ids = quizBuild({});
-      QUIZ.i = 0; QUIZ.answers = {}; QUIZ.seed = Date.now % 99991; QUIZ.on = true;
+      QUIZ.i = 0; QUIZ.answers = {}; QUIZ.seed = Date.now() % 99991; QUIZ.on = true;
       quizSave();
       go('#/quiz/run');
       return;
     }
     if (t.id === 'quizStart'){
       QUIZ.ids = quizBuild({});
-      QUIZ.i = 0; QUIZ.answers = {}; QUIZ.seed = Date.now % 99991; QUIZ.on = true;
+      QUIZ.i = 0; QUIZ.answers = {}; QUIZ.seed = Date.now() % 99991; QUIZ.on = true;
       quizSave();
       go('#/quiz/run');
       return;
@@ -4217,9 +4397,10 @@ function diseaseCard(d){
   '</a>';
 }
 
-PAGES.diseases = function(r){
-  var cat = r.query.cat || '';
-  var kw = r.query.kw || '';
+/* 病症结果区与分类标签各自成函数：输入关键词时只换这两块的 innerHTML，
+   输入框元素原地不动（重建输入框会打断中文输入法的合成）。 */
+function diseaseListHtml(kw, cat){
+  kw = kw || '';
   var list = DISEASES.filter(function(d){
     if (cat && d.category !== cat) return false;
     if (!kw) return true;
@@ -4227,14 +4408,27 @@ PAGES.diseases = function(r){
       d.mainPoints.join(' ')].join(' ');
     return hay.toLowerCase().indexOf(kw.toLowerCase()) > -1;
   });
+  return '<div class="result-head"><h2>' + list.length + ' 个病症</h2>' +
+      (cat ? '<span class="chip acc">' + esc(cat) + '</span>' : '') +
+      (kw ? '<span class="chip">关键词：' + esc(kw) + '</span>' : '') +
+    '</div>' +
+    '<section>' + (list.length ? list.map(diseaseCard).join('') : '<div class="empty-box">没有匹配的病症。</div>') + '</section>';
+}
+
+function diseaseCatChipsHtml(kw, cat){
   var counts = {};
   DISEASES.forEach(function(d){ counts[d.category] = (counts[d.category] || 0) + 1; });
-
-  var catChips = '<a class="f-chip' + (!cat ? ' on' : '') + '" href="#/diseases' + (kw ? '?kw=' + encodeURIComponent(kw) : '') + '">全部<small>' + DISEASES.length + '</small></a>' +
+  return '<a class="f-chip' + (!cat ? ' on' : '') + '" href="#/diseases' + (kw ? '?kw=' + encodeURIComponent(kw) : '') + '">全部<small>' + DISEASES.length + '</small></a>' +
     DISEASE_CATEGORIES.map(function(c){
-      return '<a class="f-chip' + (cat === c ? ' on' : '') + '" href="#/diseases?cat=' + encodeURIComponent(c) + '">' +
+      return '<a class="f-chip' + (cat === c ? ' on' : '') + '" href="#/diseases?cat=' + encodeURIComponent(c) +
+        (kw ? '&kw=' + encodeURIComponent(kw) : '') + '">' +
         esc(c) + '<small>' + counts[c] + '</small></a>';
     }).join('');
+}
+
+PAGES.diseases = function(r){
+  var cat = r.query.cat || '';
+  var kw = r.query.kw || '';
 
   return '' +
   pageHead('病症配穴', '共 ' + DISEASES.length + ' 个病症，' + DISEASE_CATEGORIES.length + ' 个分类') +
@@ -4246,11 +4440,10 @@ PAGES.diseases = function(r){
       '</div>' +
       '<a class="btn" href="#/diseases">清空</a>' +
     '</div>' +
-    '<div class="f-row">' + catChips + '</div>' +
+    '<div class="f-row" id="catChips">' + diseaseCatChipsHtml(kw, cat) + '</div>' +
     '<div class="card-note" style="margin-top:8px">主穴与配穴为教材通行取穴思路的要点整理，' + PENDING + '；实际治疗须由专业医师辨证决定。' + SAFE_NOTE + '</div>' +
   '</section>' +
-  '<div class="result-head"><h2>' + list.length + ' 个病症</h2>' + (cat ? '<span class="chip acc">' + esc(cat) + '</span>' : '') + '</div>' +
-  '<section>' + (list.length ? list.map(diseaseCard).join('') : '<div class="empty-box">没有匹配的病症。</div>') + '</section>' +
+  '<div id="diseaseList">' + diseaseListHtml(kw, cat) + '</div>' +
   '<section class="card"><div class="row"><a class="btn sm" href="#/contraindications">针灸禁忌科普</a>' +
     '<a class="btn sm" href="#/search">穴位检索</a></div></section>';
 };
@@ -4319,19 +4512,66 @@ PAGES.disease = function(r){
   srcLine(d.source, '配穴依据');
 };
 
-/* 病症搜索：防抖 200ms */
+/* 病症搜索：与检索页同一套规则 —— 输入期间绝不整页重绘，只换结果区。
+   中文输入法合成期间连地址都不动（否则拼音会被强制上屏，无法选字）。 */
 (function(){
   var timer = 0;
+  var composing = false;
+
+  /* 只改地址，不触发 hashchange（hashchange → render() → 输入框被销毁重建） */
+  function syncHash(url){
+    if (location.hash === url) return;
+    try {
+      if (window.history && history.replaceState) history.replaceState(null, '', url);
+    } catch (err){
+      /* file:// 下个别浏览器不允许写地址栏：放弃，功能不受影响 */
+    }
+  }
+  function apply(kw){
+    var cat = (parseHash().query.cat) || '';
+    syncHash('#/diseases' + (kw ? '?kw=' + encodeURIComponent(kw) : (cat ? '?cat=' + encodeURIComponent(cat) : '')));
+    var box = document.getElementById('diseaseList');
+    if (box){
+      box.innerHTML = diseaseListHtml(kw, cat);
+      var chips = document.getElementById('catChips');
+      if (chips) chips.innerHTML = diseaseCatChipsHtml(kw, cat);
+      return;
+    }
+    if (typeof render === 'function') render();
+  }
+
+  document.addEventListener('compositionstart', function(e){
+    if (!e.target || e.target.id !== 'disKw') return;
+    composing = true;
+    clearTimeout(timer);
+  });
+  document.addEventListener('compositionend', function(e){
+    var t = e.target;
+    if (!t || t.id !== 'disKw') return;
+    composing = false;
+    clearTimeout(timer);
+    apply(t.value.trim());
+  });
   document.addEventListener('input', function(e){
     var t = e.target;
     if (!t || t.id !== 'disKw') return;
+    /* 浏览器自己报的 isComposing 最可信；compositionend 万一没送到也能自愈 */
+    if (!e.isComposing && e.keyCode !== 229) composing = false;
     clearTimeout(timer);
-    timer = setTimeout(function(){
-      var kw = t.value.trim();
-      sessionStorage.setItem('zj:refocus', '1');
-      go('#/diseases' + (kw ? '?kw=' + encodeURIComponent(kw) : ''));
-    }, 200);
+    if (composing || e.isComposing || e.keyCode === 229) return;   /* 合成中什么都不做 */
+    timer = setTimeout(function(){ apply(t.value.trim()); }, 200);
   });
+
+  /* 输入不再整页重绘，只需在整页跳转后把输入框的值对齐地址 */
+  var prevAfter = window.afterRender;
+  window.afterRender = function(r){
+    if (typeof prevAfter === 'function') prevAfter(r);
+    if (r.page !== 'diseases' || composing) return;
+    var el = document.getElementById('disKw');
+    if (!el) return;
+    var cur = (r.query && r.query.kw) || '';
+    if (el.value !== cur) el.value = cur;
+  };
 })();
 </script>
 
@@ -4742,13 +4982,13 @@ PAGES.settings = function(){
       var text = JSON.stringify(exportPayload(), null, 1);
       var area = document.getElementById('expArea');
       if (area) area.value = text;
-      var ok = download(fileName, text);
+      var ok = download(fileName(), text);
       toast(ok ? '已导出并开始下载备份文件' : '已生成备份内容，请手动复制文本框');
       return;
     }
     if (t.id === 'copyBtn'){
       var area2 = document.getElementById('expArea');
-      var text2 = (area2 && area2.value) || JSON.stringify(exportPayload, null, 1);
+      var text2 = (area2 && area2.value) || JSON.stringify(exportPayload(), null, 1);
       if (area2 && !area2.value) area2.value = text2;
       copyText(text2).then(function(ok2){
         toast(ok2 ? '备份内容已复制到剪贴板' : '复制失败，请手动选中文本框内容');
@@ -5199,17 +5439,9 @@ document.addEventListener('click', function(e){
   var th = t.getAttribute('data-theme-set');
   if (th){
     Prefs.setSetting('theme', th);
-    applyTheme;
-    render;
+    applyTheme();
+    render();
     toast('已切换为' + (th === 'auto' ? '跟随系统' : th === 'dark' ? '深色' : '浅色') + '主题');
-    return;
-  }
-  /* 未实现入口的提示 */
-  var a = t.closest ? t.closest('a[data-todo]') : null;
-  if (a){
-    e.preventDefault;
-    toast('该功能将在后续阶段实现，请先点击“继续”推进开发');
-    closeDrawer;
   }
 });
 </script>
